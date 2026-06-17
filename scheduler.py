@@ -1,8 +1,8 @@
 """
-Continuous batching — Sub-project (June 12).
+Continuous batching — an iteration-level scheduler, built from scratch.
 
-The Jun-9 system-design mock surfaced this as a black box: "if requests arrive
-and finish at different times, how does ONE model serve them all efficiently?"
+The question this answers: if requests arrive and finish at different times,
+how does ONE model serve them all efficiently?
 
 STATIC batching: pick a batch, run it in LOCKSTEP, everyone leaves when the
 SLOWEST finishes. Two wastes — finished requests keep riding the batch as dead
@@ -15,7 +15,7 @@ request takes the freed slot the very next step. The GPU stays full; new work
 doesn't wait on old.
 
 TOY SCOPE — we RECOMPUTE the full context each step (no KV cache). Why throw
-away the cache we built Jun 7? Because the module-level, single-sequence cache
+away the single-sequence KV cache from model.py? Because that module-level cache
 (self.cache_k) does NOT compose with a batch whose membership and lengths change
 every step. That mismatch is precisely what PagedAttention (vLLM) solves, and
 it's the NEXT build. Today the spotlight is the SCHEDULER, so we trade speed for
@@ -55,7 +55,7 @@ class Request:
 
 class ContinuousBatchingScheduler:
     """Serves a queue of Requests through one model. `run_static_baseline()` is
-    the slow 'before'; `run()` (which calls your `step()`) is continuous batching."""
+    the slow 'before'; `run()` is continuous batching."""
 
     def __init__(self, model, max_batch_size, device, temperature=1.0):
         self.model = model
@@ -76,7 +76,7 @@ class ContinuousBatchingScheduler:
     # ------------------------------------------------------------------ #
     # The tensor plumbing — given a list of (ragged-length) requests, run
     # ONE forward pass and append one sampled token to each. This is the
-    # "decode step" both schedulers share. You do NOT need to edit this.
+    # "decode step" both schedulers share.
     # ------------------------------------------------------------------ #
     @torch.no_grad()
     def _decode(self, batch):
@@ -101,8 +101,8 @@ class ContinuousBatchingScheduler:
     # ------------------------------------------------------------------ #
     # The 'before': STATIC batching, for comparison. Process the queue in
     # fixed waves; run each wave lockstep until its SLOWEST finishes; idle
-    # slots (finished requests) keep getting decoded as dead weight. You do
-    # NOT need to edit this either — it's the baseline your step() beats.
+    # slots (finished requests) keep getting decoded as dead weight — the
+    # baseline that continuous batching beats.
     # ------------------------------------------------------------------ #
     def run_static_baseline(self):
         self.model.eval()
@@ -118,7 +118,7 @@ class ContinuousBatchingScheduler:
         return self._stats("static")
 
     # ------------------------------------------------------------------ #
-    # The 'after': CONTINUOUS batching. run() loops your step() until every
+    # The 'after': CONTINUOUS batching. run() loops step() until every
     # request is served.
     # ------------------------------------------------------------------ #
     def run(self):
@@ -128,31 +128,11 @@ class ContinuousBatchingScheduler:
         return self._stats("continuous")
 
     def step(self):
-        """ONE iteration of continuous batching. This is the heart of the idea —
-        you write it. See TODO(human) below."""
-        # TODO(human): implement one iteration-level scheduling step.
-        #
-        # You have: self.waiting (queue), self.running (current batch),
-        #           self.finished, self.max_batch_size, and the helpers
-        #           self._decode(batch) (one forward → appends a token to each),
-        #           plus the stat counters self.steps / self.useful_slot_steps /
-        #           self.total_slot_steps.
-        #
-        # An iteration should, in some order you decide:
-        #   1. ADMIT — while there's room in the batch (len(self.running) <
-        #      self.max_batch_size) AND self.waiting is non-empty, move one
-        #      waiting request into self.running. (This is what fills slots
-        #      freed by last step's evictions — the thing static batching can't do.)
-        #   2. DECODE — run one step on the current batch: self._decode(self.running).
-        #      Bump self.steps; add len(self.running) to BOTH slot-step counters
-        #      (in continuous batching every decoded slot is useful — why?).
-        #   3. EVICT — move every finished request (r.done) out of self.running
-        #      and into self.finished, so its slot is free for the next iteration.
-        #
-        # Think about ORDER: which of admit / decode / evict has to happen before
-        # which for the batch to stay full and for no finished request to get
-        # decoded twice? That ordering choice IS the design.
-        # raise NotImplementedError("implement the continuous-batching step — see TODO(human)")
+        """ONE iteration of continuous batching — the heart of the idea. Each call:
+        ADMIT waiting requests into free slots, DECODE the current batch once, then
+        EVICT finished requests so their slots free up for the next step. The ORDER
+        (admit → decode → evict) keeps the batch full and guarantees no finished
+        request is ever decoded again."""
         # ADMIT: fill EVERY free lane (while, not if). Both the initial empty
         # batch and a lane freed by last step's eviction get filled to capacity.
         while len(self.running) < self.max_batch_size and self.waiting:
@@ -211,7 +191,7 @@ if __name__ == "__main__":
     sched_cont = ContinuousBatchingScheduler(model, max_batch_size=3, device=device)
     for r in make_requests():
         sched_cont.add_request(r)
-    c = sched_cont.run()  # <-- needs your step()
+    c = sched_cont.run()
 
     print(f"\n{'':>12} | {'steps':>5} | {'slot-steps':>10} | {'util':>6} | served")
     print("-" * 52)

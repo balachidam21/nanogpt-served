@@ -1,14 +1,14 @@
 """
 A tiny GPT — char-level, single-head attention.
 
-This is Project Zero's model. It is deliberately the smallest thing that learns:
-single-head causal self-attention (the softmax(QKᵀ/√d)·V block you derived on
-paper), a feed-forward MLP, residual connections, and pre-norm LayerNorms.
+Deliberately the smallest thing that learns: causal self-attention (the
+softmax(QKᵀ/√d)·V block), a feed-forward MLP, residual connections, and pre-norm
+LayerNorms. Defaults to a single head (n_head=1); multi-head is the same code
+with n_head > 1.
 
-Multi-head attention and the KV cache come LATER, on-demand:
-  - multi-head: a refactor of CausalSelfAttention once single-head trains.
-  - KV cache:   Sub-project B — see the naive `generate()` at the bottom, which
-                recomputes the whole context every step (the waste you spotted).
+A KV cache lives in CausalSelfAttention.forward (use_cache) and in
+generate_cached(); the naive generate() at the bottom recomputes the whole
+context every step — the O(n²)-per-step waste the cache removes.
 """
 
 import math
@@ -66,16 +66,11 @@ class CausalSelfAttention(nn.Module):
         k = self.key(x).view(B, T, H, d).transpose(1, 2)     # (B, H, T, d)
         v = self.value(x).view(B, T, H, d).transpose(1, 2)   # (B, H, T, d)
 
-        # KV-cache append (implemented Jun 7) — the "append one row per step" from June 3.
-        # When use_cache is True:
-        #   1. if a cache already exists (self.cache_k is not None), CONCAT the past
-        #      k, v with the new k, v along the TIME axis (dim=2).
-        #        hint: k = torch.cat([self.cache_k, k], dim=2)   # (B, H, T_past+T, d)
-        #      do the same for v.
-        #   2. then STORE the (now-full) k, v back into self.cache_k / self.cache_v
-        #      so the next decode step can extend them.
-        #   q is NOT cached — one query per step, used once (the no-Q-cache asymmetry).
-        #   When use_cache is False (training), leave k, v untouched.
+        # KV-cache append. On a cached decode step (use_cache=True): concat the
+        # past k, v with the new k, v along the TIME axis (dim=2), then store the
+        # full tensors back so the next step can extend them. q is NOT cached —
+        # one query per step, used once (the no-Q-cache asymmetry). During
+        # training (use_cache=False) k, v are left untouched.
 
         if use_cache and self.cache_k is not None:
             k = torch.cat([self.cache_k, k], dim=2)
@@ -162,7 +157,7 @@ class GPT(nn.Module):
     @torch.no_grad()
     def generate(self, idx, max_new_tokens, temperature=1.0):
         """Naive autoregressive generation — recomputes the FULL context every
-        step (no KV cache). This is the O(n²)-per-step waste Sub-project B fixes."""
+        step (no KV cache). This is the O(n²)-per-step waste that generate_cached() fixes."""
         for _ in range(max_new_tokens):
             idx_cond = idx[:, -self.config.block_size:]   # crop to block_size
             logits, _ = self(idx_cond)

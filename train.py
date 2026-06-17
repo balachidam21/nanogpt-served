@@ -3,8 +3,8 @@ Train the tiny GPT on the Tiny Shakespeare dataset (char-level).
 
 Run:  uv run python train.py
 
-Goal for this first pass (Project Zero, Week 1): watch the loss DROP and see the
-samples go from random noise to learned-gibberish that looks Shakespeare-ish.
+Goal of this first pass: watch the loss DROP and see the samples go from random
+noise to learned-gibberish that looks Shakespeare-ish.
 """
 
 import os
