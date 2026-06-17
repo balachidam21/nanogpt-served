@@ -1,0 +1,5 @@
+# python virtualenv (recreate with: uv venv && uv sync)
+.venv/
+
+# dataset — auto-downloaded by train.py on first run
+input.txt

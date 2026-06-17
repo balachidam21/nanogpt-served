@@ -1,0 +1,10 @@
+[project]
+name = "nanogpt-served"
+version = "0.1.0"
+description = "A tiny GPT built from scratch, served with a continuous-batching scheduler — learning LLM inference by building each piece."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.4.6",
+    "torch>=2.12.0",
+]
